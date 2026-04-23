@@ -27,9 +27,10 @@ import {
   type CandidateSummary,
   type HeaderFields,
   HEADER_LABELS,
-  generateMockSummary,
   summaryToPlainText,
 } from "@/lib/interview-summary"
+import { generateQuestionnaire } from "@/app/actions/generate-questionnaire"
+import { saveQuestionnaire } from "@/app/actions/save-to-google-docs"
 
 // ─── File extraction ───────────────────────────────────────────────────────────
 
@@ -49,8 +50,8 @@ async function extractTextFromFile(file: File): Promise<{ text: string; mocked: 
   }
 
   if (ext === ".docx") {
-    // DOCX is a ZIP of XML files — full parsing requires a library.
-    // Returning a placeholder until mammoth/docx-parser is integrated.
+    // DOCX is a ZIP of XML — full parsing requires a library (e.g. mammoth).
+    // Returning mocked:true so the caller can warn the user.
     return { text: "", mocked: true }
   }
 
@@ -63,20 +64,22 @@ type Step = "input" | "generating" | "document"
 
 export function InterviewSummary() {
   const [step, setStep] = useState<Step>("input")
-  const [transcript, setTranscript] = useState("")
+  // transcriptText is held in state for the server action but never rendered
+  const [transcriptText, setTranscriptText] = useState("")
   const [notes, setNotes] = useState("")
   const [resume, setResume] = useState("")
   const [summary, setSummary] = useState<CandidateSummary | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
 
   async function handleGenerate() {
-    if (!transcript.trim()) return
+    if (!transcriptText.trim()) return
     setStep("generating")
     try {
-      const result = await generateMockSummary(transcript, notes, resume)
+      const result = await generateQuestionnaire(transcriptText, notes, resume)
       setSummary(result)
       setStep("document")
     } catch {
-      toast.error("Failed to generate summary. Please try again.")
+      toast.error("Failed to generate questionnaire. Please try again.")
       setStep("input")
     }
   }
@@ -84,13 +87,25 @@ export function InterviewSummary() {
   function handleCopy() {
     if (!summary) return
     navigator.clipboard.writeText(summaryToPlainText(summary))
-    toast.success("Summary copied to clipboard")
+    toast.success("Copied to clipboard")
   }
 
-  function handleSave() {
-    toast.info("Google Docs integration coming soon", {
-      description: "Saving the questionnaire to Google Drive is planned for the next release.",
-    })
+  async function handleSave() {
+    if (!summary) return
+    setIsSaving(true)
+    try {
+      const { url } = await saveQuestionnaire(summary)
+      toast.success("Saved to Google Docs", {
+        description: "Click to open",
+        action: { label: "Open", onClick: () => window.open(url, "_blank") },
+        duration: 8000,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error"
+      toast.error("Failed to save to Google Docs", { description: message })
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   if (step === "generating") {
@@ -104,6 +119,7 @@ export function InterviewSummary() {
         onSummaryChange={setSummary}
         onCopy={handleCopy}
         onSave={handleSave}
+        isSaving={isSaving}
         onBack={() => setStep("input")}
       />
     )
@@ -111,10 +127,10 @@ export function InterviewSummary() {
 
   return (
     <InputForm
-      transcript={transcript}
+      hasTranscript={transcriptText.trim().length > 0}
       notes={notes}
       resume={resume}
-      onTranscriptChange={setTranscript}
+      onTranscriptLoad={setTranscriptText}
       onNotesChange={setNotes}
       onResumeChange={setResume}
       onGenerate={handleGenerate}
@@ -125,20 +141,20 @@ export function InterviewSummary() {
 // ─── Input Form ────────────────────────────────────────────────────────────────
 
 interface InputFormProps {
-  transcript: string
+  hasTranscript: boolean
   notes: string
   resume: string
-  onTranscriptChange: (v: string) => void
+  onTranscriptLoad: (text: string) => void
   onNotesChange: (v: string) => void
   onResumeChange: (v: string) => void
   onGenerate: () => void
 }
 
 function InputForm({
-  transcript,
+  hasTranscript,
   notes,
   resume,
-  onTranscriptChange,
+  onTranscriptLoad,
   onNotesChange,
   onResumeChange,
   onGenerate,
@@ -162,15 +178,16 @@ function InputForm({
       setUploadedFileName(file.name)
 
       if (mocked) {
-        toast.warning("DOCX extraction isn't supported yet", {
-          description: "Please paste the transcript text manually.",
+        toast.warning("DOCX text extraction isn't supported yet", {
+          description: "Please convert your file to .txt or .md and upload again.",
         })
+        // Don't load empty text — keep whatever was loaded before
       } else {
-        onTranscriptChange(text)
+        onTranscriptLoad(text)
         toast.success(`"${file.name}" loaded`)
       }
     } catch {
-      toast.error("Could not read the file. Try pasting the text manually.")
+      toast.error("Could not read the file. Try a different format.")
     }
   }
 
@@ -180,7 +197,6 @@ function InputForm({
   }
 
   function handleDragLeave(e: React.DragEvent) {
-    // Only clear when leaving the zone itself, not child elements
     if (!e.currentTarget.contains(e.relatedTarget as Node)) {
       setIsDragging(false)
     }
@@ -196,12 +212,12 @@ function InputForm({
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (file) handleFile(file)
-    // Reset so re-uploading the same file triggers onChange again
-    e.target.value = ""
+    e.target.value = "" // allow re-uploading the same file
   }
 
   function clearUpload() {
     setUploadedFileName(null)
+    onTranscriptLoad("") // clear the transcript held by the parent
   }
 
   return (
@@ -221,7 +237,9 @@ function InputForm({
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Interview Transcript</CardTitle>
-            <CardDescription>Upload a file or paste the transcript to generate a screening questionnaire</CardDescription>
+            <CardDescription>
+              Upload your transcript file to generate a screening questionnaire
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {/* ── File upload zone ── */}
@@ -235,7 +253,7 @@ function InputForm({
               onClick={() => fileInputRef.current?.click()}
               onKeyDown={(e) => e.key === "Enter" && fileInputRef.current?.click()}
               className={cn(
-                "flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed px-4 py-5 text-center transition-colors",
+                "flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border-2 border-dashed px-4 py-8 text-center transition-colors",
                 isDragging
                   ? "border-primary bg-primary/5"
                   : "border-border hover:border-muted-foreground/50 hover:bg-muted/30"
@@ -251,7 +269,7 @@ function InputForm({
                 <span className="text-primary font-medium">Click to upload</span>
                 <span className="text-muted-foreground"> or drag and drop</span>
               </p>
-              <p className="text-muted-foreground/70 text-xs">.txt, .md, .docx</p>
+              <p className="text-muted-foreground/70 text-xs">.txt · .md · .docx</p>
             </div>
 
             <input
@@ -264,9 +282,19 @@ function InputForm({
 
             {/* Uploaded file badge */}
             {uploadedFileName && (
-              <div className="bg-muted/50 flex items-center gap-2 rounded-md px-3 py-2 text-sm">
-                <File className="text-primary size-4 shrink-0" />
+              <div
+                className={cn(
+                  "flex items-center gap-2 rounded-md px-3 py-2 text-sm",
+                  hasTranscript ? "bg-primary/8" : "bg-muted/50"
+                )}
+              >
+                <File
+                  className={cn("size-4 shrink-0", hasTranscript ? "text-primary" : "text-muted-foreground")}
+                />
                 <span className="min-w-0 flex-1 truncate font-medium">{uploadedFileName}</span>
+                {hasTranscript && (
+                  <span className="text-primary shrink-0 text-xs font-medium">Ready</span>
+                )}
                 <button
                   type="button"
                   onClick={clearUpload}
@@ -278,22 +306,7 @@ function InputForm({
               </div>
             )}
 
-            {/* Divider */}
-            <div className="flex items-center gap-3">
-              <div className="border-border h-px flex-1 border-t" />
-              <span className="text-muted-foreground/60 text-xs">or type below</span>
-              <div className="border-border h-px flex-1 border-t" />
-            </div>
-
-            {/* Transcript textarea */}
-            <Textarea
-              placeholder="Paste the interview transcript here..."
-              value={transcript}
-              onChange={(e) => onTranscriptChange(e.target.value)}
-              className="min-h-[180px] resize-y"
-            />
-
-            {/* Optional fields toggle */}
+            {/* Optional context fields */}
             <button
               type="button"
               onClick={() => setShowOptional((v) => !v)}
@@ -336,7 +349,7 @@ function InputForm({
             <Button
               className="w-full"
               onClick={onGenerate}
-              disabled={!transcript.trim()}
+              disabled={!hasTranscript}
             >
               <Sparkles className="mr-2 size-4" />
               Generate Questionnaire
@@ -373,6 +386,7 @@ interface DocumentViewProps {
   onSummaryChange: (s: CandidateSummary) => void
   onCopy: () => void
   onSave: () => void
+  isSaving: boolean
   onBack: () => void
 }
 
@@ -381,6 +395,7 @@ function DocumentView({
   onSummaryChange,
   onCopy,
   onSave,
+  isSaving,
   onBack,
 }: DocumentViewProps) {
   function updateHeader(key: keyof HeaderFields, value: string) {
@@ -426,9 +441,13 @@ function DocumentView({
               <Copy className="mr-2 size-4" />
               Copy
             </Button>
-            <Button size="sm" onClick={onSave}>
-              <Save className="mr-2 size-4" />
-              Save Questionnaire
+            <Button size="sm" onClick={onSave} disabled={isSaving}>
+              {isSaving ? (
+                <Spinner className="mr-2 size-4" />
+              ) : (
+                <Save className="mr-2 size-4" />
+              )}
+              {isSaving ? "Saving…" : "Save to Google Docs"}
             </Button>
           </div>
         </div>
@@ -466,17 +485,19 @@ function DocumentView({
 
           {/* ── Section 2: Q&A ── */}
           <div>
-            <p className="text-muted-foreground mb-5 text-xs font-semibold uppercase tracking-wider">
-              Screening Questions &amp; Answers
-            </p>
             <div className="space-y-7">
               {summary.qa.map((item, qi) => (
                 <div key={qi} className="space-y-2">
-                  {/* Question */}
-                  <input
+                  {/* Question — textarea so long lines wrap */}
+                  <textarea
                     value={item.question}
-                    onChange={(e) => updateQuestion(qi, e.target.value)}
-                    className="hover:border-border focus:border-primary w-full border-b border-transparent bg-transparent py-0.5 text-sm font-bold transition-colors outline-none"
+                    onChange={(e) => {
+                      updateQuestion(qi, e.target.value)
+                      e.target.style.height = "auto"
+                      e.target.style.height = e.target.scrollHeight + "px"
+                    }}
+                    rows={1}
+                    className="hover:border-border focus:border-primary w-full min-w-0 resize-none overflow-hidden whitespace-normal break-words border-b border-transparent bg-transparent py-0.5 text-sm font-bold leading-snug transition-colors outline-none"
                   />
                   {/* Bullets */}
                   <div className="space-y-1.5 pl-1">
@@ -485,10 +506,15 @@ function DocumentView({
                         <span className="text-muted-foreground mt-1.5 shrink-0 text-xs leading-none">
                           •
                         </span>
-                        <input
+                        <textarea
                           value={bullet}
-                          onChange={(e) => updateBullet(qi, bi, e.target.value)}
-                          className="hover:border-border focus:border-primary min-w-0 flex-1 border-b border-transparent bg-transparent py-0.5 text-sm transition-colors outline-none"
+                          onChange={(e) => {
+                            updateBullet(qi, bi, e.target.value)
+                            e.target.style.height = "auto"
+                            e.target.style.height = e.target.scrollHeight + "px"
+                          }}
+                          rows={1}
+                          className="hover:border-border focus:border-primary min-w-0 flex-1 resize-none overflow-hidden whitespace-normal break-words border-b border-transparent bg-transparent py-0.5 text-sm leading-snug transition-colors outline-none"
                         />
                       </div>
                     ))}
