@@ -164,7 +164,6 @@ function buildDocRequests(
       b.highlightYellow(labelRange.start, labelRange.end - 1)
     }
     b.insert(`${value}\n`)
-    b.normalStyle(lineStart, b.index)
   }
 
   b.insert("\n")
