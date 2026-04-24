@@ -50,9 +50,12 @@ async function extractTextFromFile(file: File): Promise<{ text: string; mocked: 
   }
 
   if (ext === ".docx") {
-    // DOCX is a ZIP of XML — full parsing requires a library (e.g. mammoth).
-    // Returning mocked:true so the caller can warn the user.
-    return { text: "", mocked: true }
+    const formData = new FormData()
+    formData.append("file", file)
+    const res = await fetch("/api/extract-docx", { method: "POST", body: formData })
+    if (!res.ok) throw new Error("Failed to extract text from DOCX file")
+    const { text } = await res.json()
+    return { text, mocked: false }
   }
 
   throw new Error(`Unsupported file type: ${ext}`)
@@ -174,18 +177,10 @@ function InputForm({
     }
 
     try {
-      const { text, mocked } = await extractTextFromFile(file)
+      const { text } = await extractTextFromFile(file)
       setUploadedFileName(file.name)
-
-      if (mocked) {
-        toast.warning("DOCX text extraction isn't supported yet", {
-          description: "Please convert your file to .txt or .md and upload again.",
-        })
-        // Don't load empty text — keep whatever was loaded before
-      } else {
-        onTranscriptLoad(text)
-        toast.success(`"${file.name}" loaded`)
-      }
+      onTranscriptLoad(text)
+      toast.success(`"${file.name}" loaded`)
     } catch {
       toast.error("Could not read the file. Try a different format.")
     }
