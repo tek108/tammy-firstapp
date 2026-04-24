@@ -92,6 +92,21 @@ class DocBuilder {
     })
   }
 
+  highlightYellow(start: number, end: number) {
+    this.formatRequests.push({
+      updateTextStyle: {
+        range: { startIndex: start, endIndex: end },
+        textStyle: {
+          backgroundColor: {
+            color: {
+              rgbColor: { red: 1, green: 1, blue: 0 },
+            },
+          },
+        },
+        fields: "backgroundColor",
+      },
+    })
+  }
   normalStyle(start: number, end: number) {
     this.formatRequests.push({
       updateParagraphStyle: {
@@ -136,10 +151,6 @@ function buildDocRequests(
 
   b.replaceAllText("{{CONTENT}}", "")
 
-  // ── Candidate Information heading ──
-  const infoHeadingRange = b.insert("Candidate Information\n")
-  b.heading2(infoHeadingRange.start, infoHeadingRange.end)
-
   // ── Header fields ──
   const headerKeys = Object.keys(HEADER_LABELS) as (keyof typeof HEADER_LABELS)[]
   for (const key of headerKeys) {
@@ -149,6 +160,9 @@ function buildDocRequests(
     const lineStart = b.index
     const labelRange = b.insert(`${label}: `)
     b.bold(labelRange.start, labelRange.end - 1) // bold the label, not the space after colon
+    if (label === "Job Title" || label === "Name" || label === "Salary") {
+      b.highlightYellow(labelRange.start, labelRange.end - 1)
+    }
     b.insert(`${value}\n`)
     b.normalStyle(lineStart, b.index)
   }
