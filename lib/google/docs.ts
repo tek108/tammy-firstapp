@@ -134,12 +134,7 @@ function buildDocRequests(
 ): docs_v1.Schema$Request[] {
   const b = new DocBuilder()
 
-
-  // ── Title ──
-  const titleRange = b.insert(`${docTitle}\n`)
-  b.heading1(titleRange.start, titleRange.end)
-
-  b.insert("\n")
+  b.replaceAllText("{{CONTENT}}", "")
 
   // ── Candidate Information heading ──
   const infoHeadingRange = b.insert("Candidate Information\n")
