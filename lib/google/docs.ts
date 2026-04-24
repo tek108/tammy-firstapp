@@ -110,7 +110,17 @@ class DocBuilder {
       },
     })
   }
-
+  replaceAllText(searchText: string, replaceText: string) {
+    this.insertRequests.push({
+      replaceAllText: {
+        containsText: {
+          text: searchText,
+          matchCase: true,
+        },
+        replaceText,
+      },
+    })
+  }
   get allRequests(): docs_v1.Schema$Request[] {
     return [...this.insertRequests, ...this.formatRequests]
   }
@@ -123,6 +133,7 @@ function buildDocRequests(
   docTitle: string
 ): docs_v1.Schema$Request[] {
   const b = new DocBuilder()
+
 
   // ── Title ──
   const titleRange = b.insert(`${docTitle}\n`)
@@ -203,14 +214,21 @@ export async function saveQuestionnaireToGoogleDocs(
   // Using drive.files.create with mimeType 'application/vnd.google-apps.document'
   // avoids the Docs API documents.create endpoint which requires additional
   // project-level permissions (HTTP 403 "caller does not have permission").
-  const file = await drive.files.create({
+  const templateId = process.env.GOOGLE_DOCS_TEMPLATE_ID
+
+  if (!templateId) {
+    throw new Error("Missing GOOGLE_DOCS_TEMPLATE_ID")
+  }
+
+  const file = await drive.files.copy({
+    fileId: templateId,
     requestBody: {
       name: docTitle,
-      mimeType: "application/vnd.google-apps.document",
       parents: [subfolderId],
     },
     fields: "id",
   })
+
   const docId = file.data.id!
 
   // Populate and format the document
